@@ -1,0 +1,152 @@
+---
+title: "lab2"
+author: "Ashley Cooper"
+date: "2023-01-19"
+output: html_document
+---
+
+```{r setup, warning = FALSE, message = FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+
+library(tidyverse)
+library(palmerpenguins)
+library(AICcmodavg)
+library(equatiomatic)
+```
+
+# Predicting penguin mass
+
+We want to create a model we can use in the field to quickly and easily estimate a penguin's mass, based on the subset of data in the `palmerpenguins` package.
+
+```{r}
+penguins_clean <- penguins %>%
+  drop_na() %>%
+  rename(mass = body_mass_g,
+         bill_l = bill_length_mm,
+         bill_d = bill_depth_mm,
+         flip_l = flipper_length_mm)
+
+mdl1 <- lm(mass ~ bill_l + bill_d + flip_l + species + sex + island, 
+                  data = penguins_clean) #essentially, evaluating mass as a function of all possible variables
+
+summary(mdl1)
+```
+
+```{r}
+f1 <- mass ~ bill_l + bill_d + flip_l + species + sex + island
+mdl1 <- lm(f1, data = penguins_clean)
+
+f2 <- mass ~ bill_l + bill_d + flip_l +species + sex
+mdl2 <- lm(f2, data=penguins_clean)
+
+f3 <- mass~ bill_d + flip_l + species + sex
+mdl3 <- lm(f3, data=penguins_clean)
+
+AIC(mdl1, mdl2, mdl3) #You can compare the AIC and degrees of freedom for each model
+BIC(mdl1, mdl2, mdl3) #And you can compare AIC with BIC for the same suite of models
+
+AICcmodavg::AICc(mdl1) #This function won't let you put in all models at one time, but you should always use AICc
+aictab(list(mdl1, mdl2, mdl3)) #Now you can look at corrected AIC for all models, including delta AIC, and ranks by which model it thinks is best. It also tells us log likelihood!
+bictab(list(mdl1, mdl2, mdl3))
+```
+```{r}
+folds <- 10
+fold_vec <- rep(1:folds, length.out = nrow(penguins_clean))
+
+set.seed(42) #good idea for random numbers or sampling
+
+#runif(1)
+
+penguins_fold <- penguins_clean %>% 
+  mutate(group = sample(fold_vec, size=n(), replace=FALSE)) #Taking the set of 333 instances of 1 - 10, we're pulling it out at random and sticking it in row 1, row 2, row 3, and getting an entire vector...
+
+table(penguins_fold$group)
+
+test_df <- penguins_fold %>% #here, we take out the first group and set it aside
+  filter(group == 1)
+train_df <- penguins_fold %>%  #and now we're taking out the first group, and creating our trainset
+  filter(group != 1)
+```
+
+Write a quick function to calculate the root-mean-square error, which we can use to see which model predicts better.
+
+Root - Mean - Square - Error (RMSE)
+
+```{r}
+#calc_mean <- function(x) { #This is an example of what we're doing with rmse
+ # m <- sum(x)/length(x)
+#}
+
+calc_rmse <- function(x, y) {
+  rmse <- (x-y)^2 %>% 
+    mean() %>% 
+    sqrt() %>% 
+    return(rmse)
+}
+```
+
+```{r}
+training_mdl1 <- lm(f1, data=train_df)
+training_mdl2 <- lm(f2, data=train_df)
+training_mdl3 <- lm(f3, data=train_df)
+
+predict_test <- test_df %>% 
+  mutate(model1 = predict(training_mdl1, test_df),
+         model2 = predict(training_mdl2, test_df),
+         model3 = predict(training_mdl3, test_df))
+
+rmse_predict_test <- predict_test %>% 
+  summarize(rmse_mdl1 = calc_rmse(model1, mass), #summarizing all 33 observations, so we'll have one row
+            rmse_mdl2 = calc_rmse(model2, mass),
+            rmse_mdl3 = calc_rmse(model3, mass))
+
+
+```
+# Let's iterate!
+
+```{r}
+rmse_df <- data.frame() #create an empty data frame
+
+for(i in 1:folds) { #if you run 1 through folds, it creates a vector from 1 up until your folds value, which is 10
+  #if you wanted to do a test loop, you might set i <- 1
+  kfold_test_df <- penguins_fold %>% 
+    filter(group == i)
+  kfold_train_df <- penguins_fold %>% 
+    filter(group != i)
+  
+  kfold_mdl1 <- lm(f1, data=kfold_train_df)
+  kfold_mdl2 <- lm(f2, data=kfold_train_df)
+  kfold_mdl3 <- lm(f3, data=kfold_train_df)
+  
+  kfold_predict_df <- kfold_test_df %>% 
+    mutate(mdl1 = predict(kfold_mdl1, kfold_test_df), #telling the function to predict the kfold for model 1, using the test data frame
+           mdl2 = predict(kfold_mdl2, .), #the "." is a shorthand, telling your model the dataframe has already been specified
+           mdl3 = predict(kfold_mdl2, .))
+  
+  kfold_rmse_df <-kfold_predict_df %>% 
+    summarize(rmse_mdl1 = calc_rmse(mdl1, mass),
+              rmse_mdl2 = calc_rmse(mdl2, mass),
+              rmse_mdl3 = calc_rmse(mdl3, mass),
+              test_gp = i)
+  
+  rmse_df <- bind_rows(rmse_df, kfold_rmse_df)
+}
+
+rmse_df %>% 
+  summarize(mean_rmse_mdl1 = mean(rmse_mdl1),
+            mean_rmse_mdl2 = mean(rmse_mdl2),
+            mean_rmse_mdl3 = mean(rmse_mdl3))
+```
+
+#Finalize the model
+Model 2 was the favored model under all three tests, so now you finalize the model.
+
+```{r}
+final_mdl <- lm(f2, data = penguins_clean)
+```
+
+Our final model:
+`r equatiomatic::extract_eq(final_mdl, wrap = TRUE)`
+
+Our final model *with coefficients*
+`r equatiomatic::extract_eq(final_mdl, wrap = TRUE, use_coefs = TRUE)`
